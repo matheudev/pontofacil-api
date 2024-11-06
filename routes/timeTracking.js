@@ -64,17 +64,18 @@ router.get('/', authMiddleware(['admin', 'rh', 'employee']), async (req, res) =>
   const { month, year, userId } = req.query;
   
   logger.info('Fetching time entries', {
-    requestedBy: req.employee.id,
+    requestedBy: req.employee?._id || req.employee?.id,
     filters: { month, year, userId }
   });
 
   try {
-    let query = { company: req.employee.company };
+    let query = {};
 
+    // Use userId from authenticated user if they're an employee
     if (req.employee.role === 'employee') {
-      query.employee = req.employee.id;
+      query.userId = req.employee?._id || req.employee?.id;
     } else if (userId) {
-      query.employee = userId;
+      query.userId = userId;
     }
 
     if (month && year) {
@@ -85,7 +86,7 @@ router.get('/', authMiddleware(['admin', 'rh', 'employee']), async (req, res) =>
 
     const timeEntries = await TimeEntry.find(query)
       .sort({ timestamp: -1 })
-      .populate('employee', 'name email');
+      .populate('userId', 'name email');
 
     logger.info('Time entries fetched successfully', {
       count: timeEntries.length
