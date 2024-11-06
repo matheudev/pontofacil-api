@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const timeEntrySchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    ref: 'Employee',
     required: true
   },
   type: {
