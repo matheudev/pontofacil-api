@@ -8,31 +8,57 @@ const router = express.Router();
 router.post('/', authMiddleware(['admin', 'rh', 'employee']), async (req, res) => {
   const { type, timestamp } = req.body;
   
-  logger.info('Time entry creation attempt', {
-    employeeId: req.employee.id,
-    type,
-    timestamp
-  });
-
   try {
+    // Get employee ID from the JWT token
+    const employeeId = req.employee?._id || req.employee?.id;
+    const company = req.employee?.company;
+
+    // Input validation
+    if (!type || !['in', 'out'].includes(type)) {
+      return res.status(400).json({ message: 'Invalid type. Must be "in" or "out"' });
+    }
+
+    if (!timestamp || isNaN(new Date(timestamp).getTime())) {
+      return res.status(400).json({ message: 'Invalid timestamp' });
+    }
+
+    if (!employeeId) {
+      return res.status(401).json({ message: 'Employee ID not found in token' });
+    }
+
+    // Create and save time entry
     const timeEntry = new TimeEntry({
-      employee: req.employee.id,
-      company: req.employee.company,
+      employee: employeeId,
+      company: company,
       type,
-      timestamp
+      timestamp: new Date(timestamp)
     });
 
-    await timeEntry.save();
+    const savedEntry = await timeEntry.save();
     
     logger.info('Time entry created successfully', {
-      entryId: timeEntry._id,
-      employeeId: req.employee.id
+      entryId: savedEntry._id,
+      employeeId: employeeId,
+      type: savedEntry.type,
+      timestamp: savedEntry.timestamp
     });
     
-    res.status(201).json({ message: 'Time entry recorded successfully' });
+    return res.status(201).json({ 
+      message: 'Time entry recorded successfully',
+      entry: savedEntry
+    });
+
   } catch (error) {
-    logger.error('Error creating time entry', error);
-    res.status(500).json({ message: 'Server error' });
+    logger.error('Error creating time entry', {
+      error: error.message,
+      stack: error.stack,
+      employeeId: req.employee?._id || req.employee?.id,
+      requestBody: req.body
+    });
+
+    return res.status(500).json({ 
+      message: 'Error creating time entry: ' + error.message
+    });
   }
 });
 
@@ -55,7 +81,7 @@ router.get('/', authMiddleware(['admin', 'rh', 'employee']), async (req, res) =>
 
     if (month && year) {
       const startDate = new Date(year, month - 1, 1);
-      const endDate = new Date(year, month, 0);
+      const endDate = new Date(year, month, 0, 23, 59, 59);
       query.timestamp = { $gte: startDate, $lte: endDate };
     }
 
