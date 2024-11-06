@@ -10,8 +10,7 @@ router.post('/', authMiddleware(['admin', 'rh', 'employee']), async (req, res) =
   
   try {
     // Get employee ID from the JWT token
-    const employeeId = req.employee?._id || req.employee?.id;
-    const company = req.employee?.company;
+    const userId = req.employee?._id || req.employee?.id;
 
     // Input validation
     if (!type || !['in', 'out'].includes(type)) {
@@ -22,14 +21,13 @@ router.post('/', authMiddleware(['admin', 'rh', 'employee']), async (req, res) =
       return res.status(400).json({ message: 'Invalid timestamp' });
     }
 
-    if (!employeeId) {
-      return res.status(401).json({ message: 'Employee ID not found in token' });
+    if (!userId) {
+      return res.status(401).json({ message: 'User ID not found in token' });
     }
 
-    // Create and save time entry
+    // Create and save time entry using userId instead of employee
     const timeEntry = new TimeEntry({
-      employee: employeeId,
-      company: company,
+      userId: userId,
       type,
       timestamp: new Date(timestamp)
     });
@@ -38,7 +36,7 @@ router.post('/', authMiddleware(['admin', 'rh', 'employee']), async (req, res) =
     
     logger.info('Time entry created successfully', {
       entryId: savedEntry._id,
-      employeeId: employeeId,
+      userId: userId,
       type: savedEntry.type,
       timestamp: savedEntry.timestamp
     });
@@ -50,7 +48,7 @@ router.post('/', authMiddleware(['admin', 'rh', 'employee']), async (req, res) =
 
   } catch (error) {
     logger.error('Error creating time entry', {
-      error: error.message,
+      error: error,
       stack: error.stack,
       employeeId: req.employee?._id || req.employee?.id,
       requestBody: req.body
