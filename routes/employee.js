@@ -14,20 +14,39 @@ router.post('/register-company', async (req, res) => {
     adminEmail: req.body.email 
   });
 
-  const { companyName, adminName, email, password } = req.body;
+  const { companyName, cnpj, adminName, email, cpf, password } = req.body;
 
   try {
-    let employee = await Employee.findOne({ email });
-    if (employee) {
-      logger.warn('Company registration failed - Email exists', { email });
-      return res.status(400).json({ message: 'Employee already exists' });
+    // Check if company with CNPJ already exists
+    let existingCompany = await Company.findOne({ cnpj });
+    if (existingCompany) {
+      logger.warn('Company registration failed - CNPJ exists', { cnpj });
+      return res.status(400).json({ message: 'CNPJ já cadastrado' });
     }
 
-    const company = new Company({ name: companyName });
+    // Check if employee with CPF already exists
+    let existingEmployee = await Employee.findOne({ cpf });
+    if (existingEmployee) {
+      logger.warn('Company registration failed - CPF exists', { cpf });
+      return res.status(400).json({ message: 'CPF já cadastrado' });
+    }
 
-    employee = new Employee({
+    // Check if email already exists
+    let emailExists = await Employee.findOne({ email });
+    if (emailExists) {
+      logger.warn('Company registration failed - Email exists', { email });
+      return res.status(400).json({ message: 'Email já cadastrado' });
+    }
+
+    const company = new Company({ 
+      name: companyName,
+      cnpj
+    });
+
+    const employee = new Employee({
       name: adminName,
       email,
+      cpf,
       password,
       position: 'Admin',
       department: 'Admin',
@@ -62,7 +81,7 @@ router.post('/register', authMiddleware(['admin', 'rh']), async (req, res) => {
     newEmployeeEmail: req.body.email 
   });
 
-  const { name, email, password, position, role, department } = req.body;
+  const { name, email, cpf, password, position, role, department } = req.body;
 
   if (role === 'rh' && req.employee.role !== 'admin') {
     logger.warn('Unauthorized RH creation attempt', { 
@@ -72,15 +91,24 @@ router.post('/register', authMiddleware(['admin', 'rh']), async (req, res) => {
   }
 
   try {
-    let employee = await Employee.findOne({ email });
-    if (employee) {
+    // Check if employee with CPF already exists
+    let existingEmployee = await Employee.findOne({ cpf });
+    if (existingEmployee) {
+      logger.warn('Employee registration failed - CPF exists', { cpf });
+      return res.status(400).json({ message: 'CPF já cadastrado' });
+    }
+
+    // Check if email already exists
+    let emailExists = await Employee.findOne({ email });
+    if (emailExists) {
       logger.warn('Employee registration failed - Email exists', { email });
-      return res.status(400).json({ message: 'Employee already exists' });
+      return res.status(400).json({ message: 'Email já cadastrado' });
     }
 
     employee = new Employee({
       name,
       email,
+      cpf,
       password,
       position,
       department,
