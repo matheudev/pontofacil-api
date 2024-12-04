@@ -5,6 +5,8 @@ const fs = require("fs");
 const path = require("path");
 const TimeEntry = require("../models/timeEntry");
 const authMiddleware = require("../middleware/authMiddleware");
+const Employee = require("../models/employee");
+const Absence = require("../models/absence");
 
 router.get("/monthly", authMiddleware(["admin", "rh"]), async (req, res) => {
   const { month, year } = req.query;
@@ -20,55 +22,104 @@ router.get("/monthly", authMiddleware(["admin", "rh"]), async (req, res) => {
     const startDate = new Date(parsedYear, parsedMonth - 1, 1);
     const endDate = new Date(parsedYear, parsedMonth, 0, 23, 59, 59);
 
+    // Get all employees from the company
+    const employees = await Employee.find({ company: req.employee.company });
+    
+    let companyStats = {
+      totalEmployees: employees.length,
+      totalHours: 0,
+      totalOvertime: 0,
+      departmentStats: {},
+      absenceCount: 0
+    };
+
+    // Get all time entries for the company
     const timeEntries = await TimeEntry.find({
-      employee: req.employee.id,
+      company: req.employee.company,
       timestamp: { $gte: startDate, $lte: endDate },
-    }).sort({ timestamp: 1 });
+    }).populate('employee').sort({ timestamp: 1 });
 
-    let totalHours = 0;
-    let totalOvertime = 0;
-    let warnings = [];
-    let dailyHours = {};
+    // Get all absences for the company
+    const absences = await Absence.find({
+      company: req.employee.company,
+      date: { $gte: startDate, $lte: endDate },
+    }).populate('employee');
 
-    // Group entries by day
+    companyStats.absenceCount = absences.length;
+
+    // Process department statistics
+    employees.forEach(emp => {
+      if (!companyStats.departmentStats[emp.department]) {
+        companyStats.departmentStats[emp.department] = {
+          employeeCount: 0,
+          totalHours: 0,
+          totalOvertime: 0,
+          absences: 0
+        };
+      }
+      companyStats.departmentStats[emp.department].employeeCount++;
+    });
+
+    // Group entries by employee and day
+    let employeeStats = {};
     timeEntries.forEach((entry) => {
+      const employeeId = entry.employee._id.toString();
       const day = new Date(entry.timestamp).toLocaleDateString();
-      if (!dailyHours[day]) {
-        dailyHours[day] = {
+      
+      if (!employeeStats[employeeId]) {
+        employeeStats[employeeId] = {
+          name: entry.employee.name,
+          department: entry.employee.department,
+          dailyHours: {},
+          totalHours: 0,
+          totalOvertime: 0
+        };
+      }
+
+      if (!employeeStats[employeeId].dailyHours[day]) {
+        employeeStats[employeeId].dailyHours[day] = {
           entries: [],
           total: 0,
           overtime: 0
         };
       }
-      dailyHours[day].entries.push(entry);
+      employeeStats[employeeId].dailyHours[day].entries.push(entry);
     });
 
-    // Calculate hours and overtime for each day
-    Object.keys(dailyHours).forEach(day => {
-      const entries = dailyHours[day].entries;
-      let dayTotal = 0;
+    // Calculate hours for each employee
+    Object.keys(employeeStats).forEach(employeeId => {
+      const employee = employeeStats[employeeId];
+      const department = employee.department;
 
-      for (let i = 0; i < entries.length; i += 2) {
-        if (entries[i + 1]) {
-          const duration = entries[i + 1].timestamp - entries[i].timestamp;
-          const hours = duration / (1000 * 60 * 60);
-          dayTotal += hours;
-        } else {
-          warnings.push(`Registro ímpar encontrado no dia ${day}`);
+      Object.keys(employee.dailyHours).forEach(day => {
+        const entries = employee.dailyHours[day].entries;
+        let dayTotal = 0;
+
+        for (let i = 0; i < entries.length; i += 2) {
+          if (entries[i + 1]) {
+            const duration = entries[i + 1].timestamp - entries[i].timestamp;
+            const hours = duration / (1000 * 60 * 60);
+            dayTotal += hours;
+          }
         }
-      }
 
-      dailyHours[day].total = dayTotal;
-      
-      // Calculate overtime (hours worked beyond 8 hours)
-      if (dayTotal > 8) {
-        dailyHours[day].overtime = dayTotal - 8;
-        totalOvertime += dayTotal - 8;
-      }
-      
-      totalHours += dayTotal;
+        employee.dailyHours[day].total = dayTotal;
+        employee.totalHours += dayTotal;
+        
+        if (dayTotal > 8) {
+          const overtime = dayTotal - 8;
+          employee.dailyHours[day].overtime = overtime;
+          employee.totalOvertime += overtime;
+          companyStats.totalOvertime += overtime;
+          companyStats.departmentStats[department].totalOvertime += overtime;
+        }
+
+        companyStats.totalHours += dayTotal;
+        companyStats.departmentStats[department].totalHours += dayTotal;
+      });
     });
 
+    // Create PDF report
     const doc = new PDFDocument();
     const fileName = `relatorio-${req.employee.id}-${month}-${year}.pdf`;
     const filePath = path.join(__dirname, "pdfs", fileName);
@@ -81,62 +132,99 @@ router.get("/monthly", authMiddleware(["admin", "rh"]), async (req, res) => {
     doc.pipe(stream);
 
     const addHeader = () => {
-      doc.fontSize(10).text(`PONTO`, { align: "center" });
+      doc.fontSize(10).text(`RELATÓRIO DE PONTO`, { align: "center" });
       doc.text(`————————————————————————————————————————————————————————`);
       doc.text(
-        `Empresa: PUC   Mes/Ano Competencia: ${parsedMonth}/${parsedYear}`
+        `Empresa: ${req.employee.company.name}   Mes/Ano Competencia: ${parsedMonth}/${parsedYear}`
       );
-      doc.text(`Endereco: AV. XXXX, XX   CNPJ: 17.178.195/0001-67`);
+      doc.text(`Endereco: ${req.employee.company.address}   CNPJ: ${req.employee.company.cnpj}`);
       doc.text(
-        `Lotacao: PSG66074  - DIRETORIA DE EDUCAÇÃO CONTINUADA - IE  Atividade Economica: 00000 Hor. de Trab.: 2ªa6ª-08-12-13-17`
-      );
-      doc.text(
-        `———————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————`
+        `Departamento: ${req.employee.department}  Horário de Trabalho: ${req.employee.workSchedule || "08:00-18:00"}`
       );
       doc.text(
-        `Funcionario: ${req.employee.name}   Categoria de Ponto: Geral PUC   Matricula: ${req.employee.matricula}`
+        `———————————————————————————————————————————————————————————————————————————`
       );
       doc.text(
-        `———————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————`
+        `Funcionario: ${req.employee.name}   Cargo: ${req.employee.role}   Matricula: ${req.employee.matricula}`
       );
-      doc.text(`Total de Horas Extras: ${totalOvertime.toFixed(2)}h`);
-      doc.text(`———————————————————————————————————————————————————————`);
+      doc.text(
+        `———————————————————————————————————————————————————————————————————————————`
+      );
     };
 
     const addFooter = () => {
+      // Calculate monthly balance
+      const monthlyBalance = calculateMonthlyBalance(employeeStats[req.employee._id]);
+      
       doc
         .moveDown(2)
         .fontSize(8)
         .text(
-          `Saldo Inicial: -01:43  Saldo Banco de Horas: -0:30  Créditos Mês: 06:10  Débitos Mês: 04:57`
+          `Saldo Inicial: ${monthlyBalance.initialBalance}  Saldo Banco de Horas: ${monthlyBalance.overtimeBalance}  Créditos Mês: ${monthlyBalance.monthlyCredits}  Débitos Mês: ${monthlyBalance.monthlyDebits}`
         );
       doc.text(
-        `———————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————`
+        `———————————————————————————————————————————————————————————————————————————`
       );
       doc
         .fontSize(8)
-        .text(`Emissao: ${new Date().toLocaleString()}  Pagina: 0001`, {
+        .text(`Emissao: ${new Date().toLocaleString()}  Pagina: ${doc.bufferedPageRange().count}`, {
           align: "right",
           baseline: "bottom",
         });
+    };
+
+    // Add this helper function to calculate monthly balance
+    const calculateMonthlyBalance = (employeeData) => {
+      if (!employeeData) {
+        return {
+          initialBalance: '00:00',
+          overtimeBalance: '00:00',
+          monthlyCredits: '00:00',
+          monthlyDebits: '00:00'
+        };
+      }
+
+      const totalWorkedHours = employeeData.totalHours;
+      const expectedHours = 8 * 22; // 8 hours per day, 22 working days
+      const overtime = employeeData.totalOvertime;
+
+      const formatHours = (hours) => {
+        const h = Math.floor(Math.abs(hours));
+        const m = Math.floor((Math.abs(hours) - h) * 60);
+        const sign = hours < 0 ? '-' : '';
+        return `${sign}${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+      };
+
+      return {
+        initialBalance: formatHours(totalWorkedHours - expectedHours - overtime),
+        overtimeBalance: formatHours(overtime),
+        monthlyCredits: formatHours(Math.max(totalWorkedHours - expectedHours, 0)),
+        monthlyDebits: formatHours(Math.max(expectedHours - totalWorkedHours, 0))
+      };
     };
 
     // Cabeçalho primeira pag
     addHeader();
 
     // Pontos registrados
-    Object.keys(dailyHours).forEach(day => {
-      const dayData = dailyHours[day];
-      doc.text(`Dia: ${day}`);
-      dayData.entries.forEach((entry, index) => {
-        doc.text(
-          `${index % 2 === 0 ? 'Entrada:' : 'Saída:'} ${new Date(entry.timestamp).toLocaleTimeString()}`
-        );
+    Object.keys(employeeStats).forEach(employeeId => {
+      const employee = employeeStats[employeeId];
+      doc.text(`Funcionario: ${employee.name}`);
+      doc.text(`Departamento: ${employee.department}`);
+      Object.keys(employee.dailyHours).forEach(day => {
+        const dayData = employee.dailyHours[day];
+        doc.text(`Dia: ${day}`);
+        dayData.entries.forEach((entry, index) => {
+          doc.text(
+            `${index % 2 === 0 ? 'Entrada:' : 'Saída:'} ${new Date(entry.timestamp).toLocaleTimeString()}`
+          );
+        });
+        doc.text(`Total do dia: ${dayData.total.toFixed(2)}h`);
+        if (dayData.overtime > 0) {
+          doc.text(`Horas extras: ${dayData.overtime.toFixed(2)}h`);
+        }
+        doc.moveDown();
       });
-      doc.text(`Total do dia: ${dayData.total.toFixed(2)}h`);
-      if (dayData.overtime > 0) {
-        doc.text(`Horas extras: ${dayData.overtime.toFixed(2)}h`);
-      }
       doc.moveDown();
     });
 
