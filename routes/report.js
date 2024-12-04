@@ -61,22 +61,29 @@ router.get("/monthly", authMiddleware(["admin", "rh"]), async (req, res) => {
       companyStats.departmentStats[emp.department].employeeCount++;
     });
 
-    // Group entries by employee and day
+    // Get employee with populated company data
+    const employeeWithCompany = await Employee.findById(req.employee._id)
+      .populate('company');
+
+    // Initialize employeeStats object
     let employeeStats = {};
+
+    // Group entries by employee
     timeEntries.forEach((entry) => {
       const employeeId = entry.employee._id.toString();
-      const day = new Date(entry.timestamp).toLocaleDateString();
-      
       if (!employeeStats[employeeId]) {
         employeeStats[employeeId] = {
           name: entry.employee.name,
           department: entry.employee.department,
+          role: entry.employee.role,
+          matricula: entry.employee.matricula,
           dailyHours: {},
           totalHours: 0,
           totalOvertime: 0
         };
       }
 
+      const day = new Date(entry.timestamp).toLocaleDateString();
       if (!employeeStats[employeeId].dailyHours[day]) {
         employeeStats[employeeId].dailyHours[day] = {
           entries: [],
@@ -87,36 +94,29 @@ router.get("/monthly", authMiddleware(["admin", "rh"]), async (req, res) => {
       employeeStats[employeeId].dailyHours[day].entries.push(entry);
     });
 
-    // Calculate hours for each employee
+    // Calculate daily hours and overtime
     Object.keys(employeeStats).forEach(employeeId => {
       const employee = employeeStats[employeeId];
-      const department = employee.department;
-
       Object.keys(employee.dailyHours).forEach(day => {
         const entries = employee.dailyHours[day].entries;
         let dayTotal = 0;
 
         for (let i = 0; i < entries.length; i += 2) {
           if (entries[i + 1]) {
-            const duration = entries[i + 1].timestamp - entries[i].timestamp;
-            const hours = duration / (1000 * 60 * 60);
-            dayTotal += hours;
+            const duration = new Date(entries[i + 1].timestamp) - new Date(entries[i].timestamp);
+            dayTotal += duration / (1000 * 60 * 60);
           }
         }
 
         employee.dailyHours[day].total = dayTotal;
         employee.totalHours += dayTotal;
-        
+
+        // Calculate overtime (hours worked beyond 8 hours)
         if (dayTotal > 8) {
           const overtime = dayTotal - 8;
           employee.dailyHours[day].overtime = overtime;
           employee.totalOvertime += overtime;
-          companyStats.totalOvertime += overtime;
-          companyStats.departmentStats[department].totalOvertime += overtime;
         }
-
-        companyStats.totalHours += dayTotal;
-        companyStats.departmentStats[department].totalHours += dayTotal;
       });
     });
 
@@ -157,17 +157,17 @@ router.get("/monthly", authMiddleware(["admin", "rh"]), async (req, res) => {
       doc.fontSize(10).text(`RELATÓRIO DE PONTO`, { align: "center" });
       doc.text(`————————————————————————————————————————————————————————`);
       doc.text(
-        `Empresa: ${req.employee.company.name}   Mes/Ano Competencia: ${parsedMonth}/${parsedYear}`
+        `Empresa: ${employeeWithCompany.company.name || 'N/A'}   Mes/Ano Competencia: ${parsedMonth}/${parsedYear}`
       );
-      doc.text(`Endereco: ${req.employee.company.address}   CNPJ: ${req.employee.company.cnpj}`);
+      doc.text(`Endereco: ${employeeWithCompany.company.address || 'N/A'}   CNPJ: ${employeeWithCompany.company.cnpj || 'N/A'}`);
       doc.text(
-        `Departamento: ${req.employee.department}  Horário de Trabalho: ${req.employee.workSchedule || "08:00-18:00"}`
+        `Departamento: ${employeeWithCompany.department || 'N/A'}  Horário de Trabalho: ${employeeWithCompany.workSchedule || "08:00-18:00"}`
       );
       doc.text(
         `———————————————————————————————————————————————————————————————————————————`
       );
       doc.text(
-        `Funcionario: ${req.employee.name}   Cargo: ${req.employee.role}   Matricula: ${req.employee.matricula}`
+        `Funcionario: ${employeeWithCompany.name}   Cargo: ${employeeWithCompany.role || 'N/A'}   Matricula: ${employeeWithCompany.matricula || 'N/A'}`
       );
       doc.text(
         `———————————————————————————————————————————————————————————————————————————`
