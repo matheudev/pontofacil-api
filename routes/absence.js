@@ -1,6 +1,7 @@
 const express = require('express');
 const Absence = require('../models/absence');
 const authMiddleware = require('../middleware/authMiddleware');
+const cors = require('cors');
 
 const router = express.Router();
 
@@ -39,6 +40,7 @@ router.get('/', authMiddleware(['admin', 'rh', 'employee']), async (req, res) =>
   }
 });
 
+router.options('/:id/status', cors());
 router.patch('/:id/status', authMiddleware(['admin', 'rh']), async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;

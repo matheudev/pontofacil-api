@@ -10,8 +10,8 @@ const app = express();
 
 // CORS configuration
 app.use(cors({
-  origin: 'http://localhost:3000',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  origin: ['http://localhost:3000', 'https://pontofacil-web.vercel.app'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'x-auth-token', 'authorization'],
   credentials: true
 }));
