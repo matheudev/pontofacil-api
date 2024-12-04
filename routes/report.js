@@ -10,21 +10,15 @@ router.get("/monthly", authMiddleware(["admin", "rh"]), async (req, res) => {
   const { month, year } = req.query;
 
   try {
-    // Mês / Ano
     const parsedMonth = parseInt(month, 10);
     const parsedYear = parseInt(year, 10);
 
-    if (
-      isNaN(parsedMonth) ||
-      isNaN(parsedYear) ||
-      parsedMonth < 1 ||
-      parsedMonth > 12
-    ) {
+    if (isNaN(parsedMonth) || isNaN(parsedYear) || parsedMonth < 1 || parsedMonth > 12) {
       return res.status(400).json({ message: "Mês ou ano inválidos." });
     }
 
     const startDate = new Date(parsedYear, parsedMonth - 1, 1);
-    const endDate = new Date(parsedYear, parsedMonth, 0, 23, 59, 59); // Último dia do mês às 23:59:59
+    const endDate = new Date(parsedYear, parsedMonth, 0, 23, 59, 59);
 
     const timeEntries = await TimeEntry.find({
       employee: req.employee.id,
@@ -32,21 +26,48 @@ router.get("/monthly", authMiddleware(["admin", "rh"]), async (req, res) => {
     }).sort({ timestamp: 1 });
 
     let totalHours = 0;
+    let totalOvertime = 0;
     let warnings = [];
+    let dailyHours = {};
 
-    for (let i = 0; i < timeEntries.length; i += 2) {
-      if (timeEntries[i + 1]) {
-        const duration =
-          timeEntries[i + 1].timestamp - timeEntries[i].timestamp;
-        totalHours += duration / (1000 * 60 * 60); // Convertendo para horas
-      } else {
-        warnings.push(
-          `Registro ímpar encontrado no dia ${new Date(
-            timeEntries[i].timestamp
-          ).toLocaleDateString()}`
-        );
+    // Group entries by day
+    timeEntries.forEach((entry) => {
+      const day = new Date(entry.timestamp).toLocaleDateString();
+      if (!dailyHours[day]) {
+        dailyHours[day] = {
+          entries: [],
+          total: 0,
+          overtime: 0
+        };
       }
-    }
+      dailyHours[day].entries.push(entry);
+    });
+
+    // Calculate hours and overtime for each day
+    Object.keys(dailyHours).forEach(day => {
+      const entries = dailyHours[day].entries;
+      let dayTotal = 0;
+
+      for (let i = 0; i < entries.length; i += 2) {
+        if (entries[i + 1]) {
+          const duration = entries[i + 1].timestamp - entries[i].timestamp;
+          const hours = duration / (1000 * 60 * 60);
+          dayTotal += hours;
+        } else {
+          warnings.push(`Registro ímpar encontrado no dia ${day}`);
+        }
+      }
+
+      dailyHours[day].total = dayTotal;
+      
+      // Calculate overtime (hours worked beyond 8 hours)
+      if (dayTotal > 8) {
+        dailyHours[day].overtime = dayTotal - 8;
+        totalOvertime += dayTotal - 8;
+      }
+      
+      totalHours += dayTotal;
+    });
 
     const doc = new PDFDocument();
     const fileName = `relatorio-${req.employee.id}-${month}-${year}.pdf`;
@@ -78,6 +99,8 @@ router.get("/monthly", authMiddleware(["admin", "rh"]), async (req, res) => {
       doc.text(
         `———————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————`
       );
+      doc.text(`Total de Horas Extras: ${totalOvertime.toFixed(2)}h`);
+      doc.text(`———————————————————————————————————————————————————————`);
     };
 
     const addFooter = () => {
@@ -102,14 +125,19 @@ router.get("/monthly", authMiddleware(["admin", "rh"]), async (req, res) => {
     addHeader();
 
     // Pontos registrados
-    timeEntries.forEach((entry, index) => {
-      doc.text(
-        `Dia: ${new Date(entry.timestamp).toLocaleDateString()}   Entr: ${
-          index % 2 === 0 ? new Date(entry.timestamp).toLocaleTimeString() : " "
-        }   Saida: ${
-          index % 2 !== 0 ? new Date(entry.timestamp).toLocaleTimeString() : " "
-        }`
-      );
+    Object.keys(dailyHours).forEach(day => {
+      const dayData = dailyHours[day];
+      doc.text(`Dia: ${day}`);
+      dayData.entries.forEach((entry, index) => {
+        doc.text(
+          `${index % 2 === 0 ? 'Entrada:' : 'Saída:'} ${new Date(entry.timestamp).toLocaleTimeString()}`
+        );
+      });
+      doc.text(`Total do dia: ${dayData.total.toFixed(2)}h`);
+      if (dayData.overtime > 0) {
+        doc.text(`Horas extras: ${dayData.overtime.toFixed(2)}h`);
+      }
+      doc.moveDown();
     });
 
     // Rodape primeira pag
