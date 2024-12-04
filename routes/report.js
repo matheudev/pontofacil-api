@@ -10,6 +10,7 @@ const Absence = require("../models/absence");
 
 router.get("/monthly", authMiddleware(["admin", "rh"]), async (req, res) => {
   const { month, year } = req.query;
+  let warnings = [];
 
   try {
     const parsedMonth = parseInt(month, 10);
@@ -116,6 +117,27 @@ router.get("/monthly", authMiddleware(["admin", "rh"]), async (req, res) => {
 
         companyStats.totalHours += dayTotal;
         companyStats.departmentStats[department].totalHours += dayTotal;
+      });
+    });
+
+    // Add warnings for incomplete entries
+    Object.keys(employeeStats).forEach(employeeId => {
+      const employee = employeeStats[employeeId];
+      Object.keys(employee.dailyHours).forEach(day => {
+        const entries = employee.dailyHours[day].entries;
+        if (entries.length % 2 !== 0) {
+          warnings.push(`${employee.name}: Registro incompleto no dia ${day}`);
+        }
+      });
+    });
+
+    // Add warnings for excessive hours
+    Object.keys(employeeStats).forEach(employeeId => {
+      const employee = employeeStats[employeeId];
+      Object.keys(employee.dailyHours).forEach(day => {
+        if (employee.dailyHours[day].total > 12) {
+          warnings.push(`${employee.name}: Horas excessivas (${employee.dailyHours[day].total.toFixed(2)}h) no dia ${day}`);
+        }
       });
     });
 
