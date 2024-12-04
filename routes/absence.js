@@ -39,4 +39,32 @@ router.get('/', authMiddleware(['admin', 'rh', 'employee']), async (req, res) =>
   }
 });
 
+router.patch('/:id/status', authMiddleware(['admin', 'rh']), async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  try {
+    if (!['approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ message: 'Invalid status' });
+    }
+
+    const absence = await Absence.findOne({
+      _id: id,
+      company: req.employee.company
+    });
+
+    if (!absence) {
+      return res.status(404).json({ message: 'Absence not found' });
+    }
+
+    absence.status = status;
+    await absence.save();
+
+    res.json({ message: 'Status updated successfully', absence });
+  } catch (error) {
+    console.error('Error updating absence status:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 module.exports = router;
